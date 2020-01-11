@@ -1,0 +1,66 @@
+{
+  "target": "bmv2",
+  "p4info": "build/program.p4.p4info.txt",
+  "bmv2_json": "build/program.json",
+  "table_entries": [
+    {
+      "table": "MyIngress.inport_table",
+      "match": {
+        "standard_metadata.ingress_port": 1
+      },
+      "action_name": "MyIngress.set_cpu_meta",
+      "action_params": {
+        "inPort": "00:00:00:00:04:01"
+      }
+    },
+    {
+      "table": "MyIngress.inport_table",
+      "match": {
+        "standard_metadata.ingress_port": 2
+      },
+      "action_name": "MyIngress.set_cpu_meta",
+      "action_params": {
+        "inPort": "00:00:00:00:04:02"
+      }
+    },
+    {
+      "table": "MyIngress.inport_table",
+      "match": {
+        "standard_metadata.ingress_port": 3
+      },
+      "action_name": "MyIngress.set_cpu_meta",
+      "action_params": {
+        "inPort": "00:00:00:00:04:03"
+      }
+    },
+    {
+      "table": "MyIngress.mcg_table",
+      "match": {
+        "hdr.ipv4.dstAddr": "224.0.0.5"
+      },
+      "action_name": "MyIngress.set_mcg",
+      "action_params": {
+        "mcast_group": 1
+      }
+    }
+  ],
+  "multicast_group_entries" : [
+    {
+      "multicast_group_id" : 1,
+      "replicas" : [
+        {
+          "egress_port" : 1,
+          "instance" : 1
+        },
+        {
+          "egress_port" : 2,
+          "instance" : 1
+        },
+        {
+          "egress_port" : 3,
+          "instance" : 1
+        }
+      ]
+    }
+  ]
+}
