@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 import sys
 import os
-import socket
 import time
 import binascii
 from threading import Thread
 from datetime import timedelta
 
 from scapy.all import sniff, sendp, get_if_hwaddr
-from scapy.all import Ether, IP, UDP, TCP, Packet
+from scapy.all import Ether, IP, UDP, TCP, Packet, raw
 from timeloop import Timeloop
 from scapy_ospf import OSPF_LSUpd, PWOSPF_Hello, OSPF_Hdr, CPU_metadata
 import psycopg2
 
-from utils import ALLSPFRouters, get_ctrl_if_and_rid, get_db_name
+from utils import ALLSPFRouters, get_ctrl_if_and_rid, get_db_name, create_switch_connection
 import queries
+# TODO: Make it in a prettier way.
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  '../utils/'))
@@ -52,7 +52,7 @@ class Controller:
                 hellointerval=self.HELLO_INT
             )
             pkt = ether_pkt / ip_hdr / ospf_hdr / hello_hdr
-            pkt.show2()
+            # pkt.show2()
             sendp(pkt, iface=self.CTRL_IFACE, verbose=False)
             print("Hello sent.")
 
@@ -125,7 +125,7 @@ class Controller:
 
 
     def handle_pkt(self, pkt):
-        # binary_data = raw(pkt)
+        binary_data = raw(pkt)
         string_data = binascii.hexlify(binary_data)
         cpu_meta = CPU_metadata(binascii.unhexlify(string_data[:12]))
         pkt = Ether(binascii.unhexlify(string_data[12:]))
@@ -136,7 +136,7 @@ class Controller:
             ingress_port = cpu_meta.inport
             rid = pkt[OSPF_Hdr].src
             print("Got a hello packet from {} on port {}".format(rid, ingress_port))
-            pkt.show2()
+            # pkt.show2()
             hello_int = pkt[PWOSPF_Hello].hellointerval
             last_hello = time.time()
             self.cur.execute(queries.SELECT_NEIGHBOR, (rid,))
@@ -157,10 +157,10 @@ class Controller:
 
     def run(self):
         self.tl.start()
-        # print "Control plane started on interface %s | RID: %s", (self.CTRL_IFACE, self.RID,)
+        print "Control plane started on interface {} | RID: {}".format(self.CTRL_IFACE, self.RID)
 
         try:
-            # print "Sniffing on %s", self.CTRL_IFACE
+            print "Sniffing on {}".format(self.CTRL_IFACE)
             sys.stdout.flush()
             sniff(iface=self.CTRL_IFACE, prn=lambda x: self.handle_pkt(x))
         except KeyboardInterrupt:
@@ -170,7 +170,7 @@ class Controller:
 
 def main():
     if len(sys.argv) < 2:
-        # print 'Missing argument: <device_id>'
+        print 'Missing argument: <device_id>'
         exit(1)
     controller = Controller(sys.argv[1])
     controller.run()

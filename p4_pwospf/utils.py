@@ -1,4 +1,11 @@
+import sys
+
 from scapy.all import get_if_list, get_if_raw_addr, get_alias_address
+# TODO: Make it in a prettier way.
+sys.path.append(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 '../utils/'))
+import p4runtime_lib
 
 ALLSPFRouters = "224.0.0.5"
 IPs = {
