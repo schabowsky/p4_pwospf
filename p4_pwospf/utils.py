@@ -5,7 +5,9 @@ from scapy.all import get_if_list, get_if_raw_addr, get_alias_address
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  '../utils/'))
-import p4runtime_lib
+from p4runtime_lib.bmv2 import Bmv2SwitchConnection
+from p4runtime_lib.helper import P4InfoHelper
+import grpc
 
 ALLSPFRouters = "224.0.0.5"
 IPs = {
@@ -59,11 +61,28 @@ def get_db_name(device_id):
     exit(1)
 
 
-def create_switch_connection(device_id):
-    conn = p4runtime_lib.bmv2.Bmv2SwitchConnection(
-            name=device_id.replace('c', 's'),
+def get_p4info_helper():
+    return P4InfoHelper("build/program.p4.p4info.txt")
+
+
+def create_switch_connection(p4info_helper, device_id):
+    switch_name = device_id.replace('c', 's')
+    dev_id = int(device_id[-1:]) - 1
+    conn = Bmv2SwitchConnection(
+            name=switch_name,
             address='127.0.0.1:{}'.format(GRPC_PORTs[device_id]),
-            # device_id=0,
-            proto_dump_file='logs/{}-p4runtime-requests.txt'.format(device_id))
-    conn.MasterArbitrationUpdate()
+            device_id=dev_id,
+            proto_dump_file='logs/{}-p4runtime-requests.txt'.format(switch_name))
+    try:
+        conn.MasterArbitrationUpdate()
+        bmv2_file = "topo/{}-runtime.json".format(switch_name)
+        conn.SetForwardingPipelineConfig(p4info=p4info_helper.p4info, bmv2_json_file_path=bmv2_file)
+    except grpc.RpcError as e:
+        # Forwarding pipeline have been already configured.
+        print "GRPC error: {}".format(e)
+        # conn.shutdown()
     return conn
+
+
+def match_hdw_port(port):
+    return int(port[-1:])
