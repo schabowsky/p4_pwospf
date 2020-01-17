@@ -11,13 +11,13 @@ from scapy.all import Ether, IP, UDP, TCP, Packet, raw
 from timeloop import Timeloop
 from scapy_ospf import OSPF_LSUpd, PWOSPF_Hello, OSPF_Hdr, CPU_metadata
 import psycopg2
+import grpc
 
 from utils import ALLSPFRouters, get_ctrl_if_and_rid, get_db_name, create_switch_connection, match_hdw_port, get_p4info_helper
 import queries
 # TODO: Make it in a prettier way.
 sys.path.append(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 '../utils/'))
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '../utils/'))
 import p4runtime_lib.bmv2
 
 
@@ -41,7 +41,6 @@ class Controller:
         @self.tl.job(interval=timedelta(seconds=self.HELLO_INT))
         def send_hello():
             """Send Hello message periodically (every HELLO_INT)."""
-            self.read_table_rules()
             ether_pkt = Ether(
                 src=get_if_hwaddr(self.CTRL_IFACE), dst='ff:ff:ff:ff:ff:ff')
             ip_hdr = IP(src=self.RID, dst=ALLSPFRouters)
@@ -94,11 +93,10 @@ class Controller:
         """Read table rules from switch."""
         print "Read table rules..."
         for response in self.switch_conn.ReadTableEntries():
-            print "Any response?"
             for entity in response.entities:
                 entry = entity.table_entry
                 table_name = self.p4info_helper.get_tables_name(entry.table_id)
-                print table_name
+                print entity
                 for m in entry.match:
                     print self.p4info_helper.get_match_field_name(table_name, m.field_id)
                     print self.p4info_helper.get_match_field_value(m)
@@ -124,22 +122,23 @@ class Controller:
                 queries.INSERT_NEIGHBOR,
                 (rid, ingress_port, hello_int, last_hello,))
             self.write_ospf_table(rid, ingress_port)
-            self.read_table_rules()
         self.con.commit()
-        sys.stdout.flush()
 
 
     def write_ospf_table(self, rid, ingress_port):
-        table_entry = self.p4info_helper.buildTableEntry(
-            table_name="MyIngress.ospf_table",
-            match_fields={
-                "hdr.ipv4.dstAddr": rid
-            },
-            action_name="MyIngress.ospf_forward",
-            action_params={
-                "port": match_hdw_port(ingress_port)
-            })
-        self.switch_conn.WriteTableEntry(table_entry)
+        try:
+            table_entry = self.p4info_helper.buildTableEntry(
+                table_name="MyIngress.ospf_table",
+                match_fields={
+                    "hdr.ipv4.dstAddr": rid
+                },
+                action_name="MyIngress.ospf_forward",
+                action_params={
+                    "port": match_hdw_port(ingress_port)
+                })
+            self.switch_conn.WriteTableEntry(table_entry)
+        except grpc.RpcError as e:
+            print "GRPC error: {}".format(e)
 
 
     def handle_pkt(self, pkt):
