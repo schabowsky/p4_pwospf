@@ -217,10 +217,27 @@ control MyEgress(inout headers hdr,
         mark_to_drop(standard_metadata);
     }
 
+    action set_ospf_src(ip4Addr_t srcAddr) {
+        hdr.ipv4.srcAddr = srcAddr;
+    }
+
+    table egress_table {
+        key = {
+            standard_metadata.egress_port: exact;
+        }
+        actions = {
+            set_ospf_src;
+    	    drop;
+        }
+        size = 1024;
+    }
+
     apply {
         // Prune multicast packet to ingress port to preventing loop
         if (standard_metadata.egress_port == standard_metadata.ingress_port)
             drop();
+        if (hdr.ospfv2.isValid())
+            egress_table.apply();
     }
 }
 

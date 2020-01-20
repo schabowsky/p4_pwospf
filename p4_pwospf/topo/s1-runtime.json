@@ -34,6 +34,47 @@
       }
     },
     {
+      "table": "MyIngress.ipv4_lpm",
+      "match": {
+        "hdr.ipv4.dstAddr": ["10.0.1.1", 32]
+      },
+      "action_name": "MyIngress.ipv4_forward",
+      "action_params": {
+        "dstAddr": "08:00:00:00:01:11",
+        "port": 1
+      }
+    },
+    {
+      "table": "MyEgress.egress_table",
+      "match": {
+        "standard_metadata.egress_port": 1
+      },
+      "action_name": "MyEgress.set_ospf_src",
+      "action_params": {
+        "srcAddr": "10.0.1.11"
+      }
+    },
+    {
+      "table": "MyEgress.egress_table",
+      "match": {
+        "standard_metadata.egress_port": 2
+      },
+      "action_name": "MyEgress.set_ospf_src",
+      "action_params": {
+        "srcAddr": "10.0.4.11"
+      }
+    },
+    {
+      "table": "MyEgress.egress_table",
+      "match": {
+        "standard_metadata.egress_port": 3
+      },
+      "action_name": "MyEgress.set_ospf_src",
+      "action_params": {
+        "srcAddr": "10.0.7.11"
+      }
+    },
+    {
       "table": "MyIngress.mcg_table",
       "match": {
         "hdr.ipv4.dstAddr": "224.0.0.5"

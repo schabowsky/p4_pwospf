@@ -57,7 +57,7 @@ class OSPFOptionsField(FlagsField):
 _OSPF_types = {1: "Hello",
                2: "DBDesc",
                3: "LSReq",
-               4: "LSUpd",
+               4: "LSU",
                5: "LSAck"}
 
 
@@ -120,30 +120,23 @@ class OSPF_Hdr(Packet):
         return 0
 
 
-# class PWOSPF_Hello(Packet):
-#     name = "OSPF Hello"
-#     fields_desc = [IPField("mask", "255.255.255.0"),
-#                    ShortField("hellointerval", 10),
-#                    OSPFOptionsField(),
-#                    ByteField("prio", 1),
-#                    IntField("deadinterval", 40),
-#                    IPField("router", "0.0.0.0"),
-#                    IPField("backup", "0.0.0.0"),
-#                    FieldListField("neighbors", [], IPField("", "0.0.0.0"), length_from=lambda pkt: (pkt.underlayer.len - 44) if pkt.underlayer else None)]  # noqa: E501
-#
-#     def guess_payload_class(self, payload):
-#         # check presence of LLS data block flag
-#         if self.options & 0x10 == 0x10:
-#             return OSPF_LLS_Hdr
-#         else:
-#             return Packet.guess_payload_class(self, payload)
-class PWOSPF_Hello(Packet):
-    name = "PWOSPF Hello"
+class OSPF_Hello(Packet):
+    name = "OSPF Hello"
     fields_desc = [IPField("mask", "255.255.255.0"),
-                   ShortField("hellointerval", 10)]
+                   ShortField("hellointerval", 10),
+                   OSPFOptionsField(),
+                   ByteField("prio", 1),
+                   IntField("deadinterval", 40),
+                   IPField("router", "0.0.0.0"),
+                   IPField("backup", "0.0.0.0"),
+                   FieldListField("neighbors", [], IPField("", "0.0.0.0"), length_from=lambda pkt: (pkt.underlayer.len - 44) if pkt.underlayer else None)]  # noqa: E501
 
     def guess_payload_class(self, payload):
-        return CPU_metadata
+        # check presence of LLS data block flag
+        if self.options & 0x10 == 0x10:
+            return OSPF_LLS_Hdr
+        else:
+            return Packet.guess_payload_class(self, payload)
 
 
 class LLS_Generic_TLV(Packet):
@@ -411,17 +404,9 @@ class OSPF_LSReq(Packet):
                                    length_from=lambda pkt:pkt.underlayer.len - 24)]  # noqa: E501
 
 
-# class OSPF_LSUpd(Packet):
-#     name = "OSPF Link State Update"
-#     fields_desc = [FieldLenField("lsacount", None, fmt="!I", count_of="lsalist"),  # noqa: E501
-#                    PacketListField("lsalist", None, _LSAGuessPayloadClass,
-#                                    count_from=lambda pkt: pkt.lsacount,
-#                                    length_from=lambda pkt: pkt.underlayer.len - 24)]  # noqa: E501
 class OSPF_LSUpd(Packet):
     name = "OSPF Link State Update"
-    fields_desc = [XIntField("seq", 0x80000001),
-                   ShortField("ttl", 1),
-                   FieldLenField("lsacount", None, fmt="!I", count_of="lsalist"),  # noqa: E501
+    fields_desc = [FieldLenField("lsacount", None, fmt="!I", count_of="lsalist"),  # noqa: E501
                    PacketListField("lsalist", None, _LSAGuessPayloadClass,
                                    count_from=lambda pkt: pkt.lsacount,
                                    length_from=lambda pkt: pkt.underlayer.len - 24)]  # noqa: E501
@@ -747,6 +732,37 @@ class OSPFv3_LSAck(Packet):
                                    length_from=lambda pkt:pkt.underlayer.len - 16)]  # noqa: E501
 
 
+###############################################################################
+# PWOSPF
+###############################################################################
+
+
+class PWOSPF_Hello(Packet):
+    name = "PWOSPF Hello"
+    fields_desc = [IPField("mask", "255.255.255.0"),
+                   ShortField("hellointerval", 10)]
+
+
+class PWOSPF_LSA(Packet):
+    name = "PWOSPF Link State Advertisement"
+    fields_desc = [IPField("subnet", "192.168.0.0"),
+                   IPField("mask", "255.255.255.0"),
+                   IPField("rid", "1.1.1.1")]
+
+    def extract_padding(self, p):
+        return b"", p
+
+
+class PWOSPF_LSU(Packet):
+    name = "PWOSPF Link State Update"
+    fields_desc = [XIntField("seq", 0x80000001),
+                   ShortField("ttl", 1),
+                   FieldLenField("lsacount", None, fmt="!I", count_of="lsalist"),  # noqa: E501
+                   PacketListField("lsalist", [], PWOSPF_LSA,
+                                   count_from=lambda pkt: pkt.lsacount,
+                                   length_from=lambda pkt: pkt.underlayer.len - 24)]  # noqa: E501
+
+
 class CPU_metadata(Packet):
     name = "CPU Metadata"
     fields_desc = [MACField("inport", None)]
@@ -756,7 +772,7 @@ bind_layers(IP, OSPF_Hdr, proto=89)
 bind_layers(OSPF_Hdr, PWOSPF_Hello, type=1)
 bind_layers(OSPF_Hdr, OSPF_DBDesc, type=2)
 bind_layers(OSPF_Hdr, OSPF_LSReq, type=3)
-bind_layers(OSPF_Hdr, OSPF_LSUpd, type=4)
+bind_layers(OSPF_Hdr, PWOSPF_LSU, type=4)
 bind_layers(OSPF_Hdr, OSPF_LSAck, type=5)
 DestIPField.bind_addr(OSPF_Hdr, "224.0.0.5")
 

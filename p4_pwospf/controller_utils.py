@@ -108,3 +108,9 @@ def create_switch_connection(p4info_helper, device_id):
 
 def match_hdw_port(port):
     return int(port[-1:])
+
+
+def get_rid(id, routers):
+    for r in routers:
+        if r[0] == id:
+            return r[1]

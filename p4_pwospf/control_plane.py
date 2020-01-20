@@ -9,11 +9,12 @@ from datetime import timedelta
 from scapy.all import sniff, sendp, get_if_hwaddr
 from scapy.all import Ether, IP, UDP, TCP, Packet, raw
 from timeloop import Timeloop
-from scapy_ospf import OSPF_LSUpd, PWOSPF_Hello, OSPF_Hdr, CPU_metadata
+from scapy_ospf import PWOSPF_LSA, PWOSPF_LSU, PWOSPF_Hello, OSPF_Hdr, CPU_metadata
 import psycopg2
 import grpc
+from netaddr import IPAddress, IPNetwork
 
-from utils import ALLSPFRouters, get_ctrl_if_and_rid, get_db_name, create_switch_connection, match_hdw_port, get_p4info_helper
+import controller_utils as cu
 import queries
 # TODO: Make it in a prettier way.
 sys.path.append(
@@ -23,18 +24,19 @@ import p4runtime_lib.bmv2
 
 class Controller:
     """Main script class."""
+    HELLO_INT = 10
+    LSU_INT = 30
+    LSU_SEQ = 1
+    DB_REFRESH_INT = 1
 
     def __init__(self, device_id):
         """Init method."""
 
-        self.HELLO_INT = 10
-        self.LSU_INT = 30
-        self.DB_REFRESH_INT = 1
-        self.CTRL_IFACE, self.RID = get_ctrl_if_and_rid(device_id)
-        self.p4info_helper = get_p4info_helper()
-        self.switch_conn = create_switch_connection(self.p4info_helper, device_id)
-        DB = get_db_name(device_id)
-        self.con = psycopg2.connect(database=DB, user="atsi", password="atsi", host="127.0.0.1", port="5432")
+        self.CTRL_IFACE, self.RID = cu.get_ctrl_if_and_rid(device_id)
+        self.p4info_helper = cu.get_p4info_helper()
+        self.switch_conn = cu.create_switch_connection(self.p4info_helper, device_id)
+        db = cu.get_db_name(device_id)
+        self.con = psycopg2.connect(database=db, user="atsi", password="atsi", host="127.0.0.1", port="5432")
         self.cur = self.con.cursor()
         self.tl = Timeloop()
 
@@ -43,10 +45,10 @@ class Controller:
             """Send Hello message periodically (every HELLO_INT)."""
             ether_pkt = Ether(
                 src=get_if_hwaddr(self.CTRL_IFACE), dst='ff:ff:ff:ff:ff:ff')
-            ip_hdr = IP(src=self.RID, dst=ALLSPFRouters)
+            ip_hdr = IP(src=self.RID, dst=cu.ALLSPFRouters)
             ospf_hdr = OSPF_Hdr(type=1, src=self.RID)
             hello_hdr = PWOSPF_Hello(
-                mask="255.255.255.0",
+                mask="255.255.255.248",
                 hellointerval=self.HELLO_INT
             )
             pkt = ether_pkt / ip_hdr / ospf_hdr / hello_hdr
@@ -60,16 +62,34 @@ class Controller:
 
             self.cur.execute(queries.SELECT_NEIGHBORS)
             routers = self.cur.fetchall()
+
             ether_pkt = Ether(
                 src=get_if_hwaddr(self.CTRL_IFACE), dst='ff:ff:ff:ff:ff:ff')
             ospf_hdr = OSPF_Hdr(type=4, src=self.RID)
-            lsu_hdr = OSPF_LSUpd()
-            pkts = [ether_pkt / IP(src=self.RID, dst=r[1]) / ospf_hdr / lsu_hdr for r in routers]
-            [pkt.show2() for pkt in pkts]
-            # for i in self.interfaces:
-            #     sendp(pkt, iface=i, verbose=False)
-            # TODO: Get info from data base and emit LSU packet.
+
+            self.cur.execute(queries.SELECT_LINKS)
+            links = self.cur.fetchall()
+            lsa_list = None
+            for l in links:
+                ip = IPNetwork(l[1])
+                subnet, mask = ip.ip, ip.netmask
+                rid = l[2]
+                lsa = PWOSPF_LSA(subnet=subnet, mask=mask, rid=rid)
+                lsa_list = lsa if not lsa_list else [lsa_list| lsa]
+
+            lsu_hdr = PWOSPF_LSU(seq=self.LSU_SEQ, ttl=1, lsalist=[lsa_list])
+
+            pkts = []
+            for r in routers:
+                ip_pkt = ether_pkt / IP(src=self.RID, dst=r[1])
+                pkt = ip_pkt / ospf_hdr / lsu_hdr / lsa_list
+                pkts.append(pkt)
+            for p in pkts:
+                p.show2()
+                sendp(p, iface=self.CTRL_IFACE, verbose=False)
             print("LSU sent.")
+            # TODO: Increment if data has changed.
+            # self.seq = self.seq + 1
 
         @self.tl.job(interval=timedelta(seconds=self.DB_REFRESH_INT))
         def check_db():
@@ -83,6 +103,7 @@ class Controller:
                     to_delete.append(router[0])
             if to_delete:
                 to_delete = tuple(to_delete)
+                # TODO: Remove links, then neighbor.
                 self.cur.execute(queries.REMOVE_NEIGHBOR, (to_delete,))
                 self.con.commit()
                 print("Deleted!")
@@ -108,7 +129,7 @@ class Controller:
                     print p.value
 
 
-    def save_neighbor(self, pkt, ingress_port):
+    def handle_hello_msg(self, pkt, ingress_port):
         rid = pkt[OSPF_Hdr].src
         hello_int = pkt[PWOSPF_Hello].hellointerval
         last_hello = time.time()
@@ -122,6 +143,12 @@ class Controller:
                 queries.INSERT_NEIGHBOR,
                 (rid, ingress_port, hello_int, last_hello,))
             self.write_ospf_table(rid, ingress_port)
+            # TODO: Save link to database.
+            mask = IPAddress(pkt[PWOSPF_Hello].mask).netmask_bits()
+            subnetwork = pkt[IP].src.split('.')
+            subnetwork = '.'.join(subnetwork[:-1]) + '.10/' + str(mask)
+            self.cur.execute(queries.INSERT_LINK, (subnetwork, rid, hex(0)))
+            print 'Link created!'
         self.con.commit()
 
 
@@ -134,7 +161,7 @@ class Controller:
                 },
                 action_name="MyIngress.ospf_forward",
                 action_params={
-                    "port": match_hdw_port(ingress_port)
+                    "port": cu.match_hdw_port(ingress_port)
                 })
             self.switch_conn.WriteTableEntry(table_entry)
         except grpc.RpcError as e:
@@ -155,8 +182,9 @@ class Controller:
             rid = pkt[OSPF_Hdr].src
             print "Got a hello packet from {} on port {}".format(rid, ingress_port)
             # pkt.show2()
-            self.save_neighbor(pkt, ingress_port)
-        elif OSPF_LSUpd in pkt:
+            self.handle_hello_msg(pkt, ingress_port)
+        elif PWOSPF_LSU in pkt:
+            pkt.show2()
             # TODO: Handle OSPF LSU packets.
             pass
 

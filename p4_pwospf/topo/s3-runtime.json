@@ -34,6 +34,26 @@
       }
     },
     {
+      "table": "MyEgress.egress_table",
+      "match": {
+        "standard_metadata.egress_port": 2
+      },
+      "action_name": "MyEgress.set_ospf_src",
+      "action_params": {
+        "srcAddr": "10.0.6.13"
+      }
+    },
+    {
+      "table": "MyEgress.egress_table",
+      "match": {
+        "standard_metadata.egress_port": 3
+      },
+      "action_name": "MyEgress.set_ospf_src",
+      "action_params": {
+        "srcAddr": "10.0.5.13"
+      }
+    },
+    {
       "table": "MyIngress.mcg_table",
       "match": {
         "hdr.ipv4.dstAddr": "224.0.0.5"
