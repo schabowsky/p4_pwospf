@@ -26,12 +26,12 @@ class Controller:
     """Main script class."""
     HELLO_INT = 10
     LSU_INT = 30
+    LSU_TIMEOUT = 40
     LSU_SEQ = 1
     DB_REFRESH_INT = 1
 
     def __init__(self, device_id):
         """Init method."""
-
         self.CTRL_IFACE, self.RID = cu.get_ctrl_if_and_rid(device_id)
         self.p4info_helper = cu.get_p4info_helper()
         self.switch_conn = cu.create_switch_connection(self.p4info_helper, device_id)
@@ -59,56 +59,74 @@ class Controller:
         @self.tl.job(interval=timedelta(seconds=self.LSU_INT))
         def send_lsu():
             """Send LSU message periodically (every LSU_INT)."""
-
-            self.cur.execute(queries.SELECT_NEIGHBORS)
+            self.cur.execute(queries.SELECT_ALL_NEIGHBORS)
             routers = self.cur.fetchall()
 
             ether_pkt = Ether(
                 src=get_if_hwaddr(self.CTRL_IFACE), dst='ff:ff:ff:ff:ff:ff')
             ospf_hdr = OSPF_Hdr(type=4, src=self.RID)
 
-            self.cur.execute(queries.SELECT_LINKS)
+            self.cur.execute(queries.SELECT_ALL_LINKS)
             links = self.cur.fetchall()
             lsa_list = None
             for l in links:
                 ip = IPNetwork(l[1])
                 subnet, mask = ip.ip, ip.netmask
-                rid = l[2]
+                rid = l[3]
                 lsa = PWOSPF_LSA(subnet=subnet, mask=mask, rid=rid)
                 lsa_list = lsa if not lsa_list else [lsa_list| lsa]
 
-            lsu_hdr = PWOSPF_LSU(seq=self.LSU_SEQ, ttl=1, lsalist=[lsa_list])
-
-            pkts = []
-            for r in routers:
-                ip_pkt = ether_pkt / IP(src=self.RID, dst=r[1])
-                pkt = ip_pkt / ospf_hdr / lsu_hdr / lsa_list
-                pkts.append(pkt)
-            for p in pkts:
-                p.show2()
-                sendp(p, iface=self.CTRL_IFACE, verbose=False)
-            print("LSU sent.")
-            # TODO: Increment if data has changed.
-            # self.seq = self.seq + 1
+            if lsa_list:
+                lsu_hdr = PWOSPF_LSU(seq=self.LSU_SEQ, ttl=1, lsalist=[lsa_list])
+                pkts = []
+                for r in routers:
+                    ip_pkt = ether_pkt / IP(src=self.RID, dst=r[1])
+                    pkt = ip_pkt / ospf_hdr / lsu_hdr
+                    pkts.append(pkt)
+                for p in pkts:
+                    p.show2()
+                    sendp(p, iface=self.CTRL_IFACE, verbose=False)
+                print("LSU sent.")
+                self.LSU_SEQ = self.LSU_SEQ + 1
 
         @self.tl.job(interval=timedelta(seconds=self.DB_REFRESH_INT))
         def check_db():
             """Check if none of records in database expired."""
-
-            self.cur.execute(queries.SELECT_NEIGHBORS)
+            self.cur.execute(queries.SELECT_ALL_NEIGHBORS)
             routers = self.cur.fetchall()
-            to_delete = []
-            for router in routers:
-                if router[4] + (3 * router[3]) < time.time():
-                    to_delete.append(router[0])
-            if to_delete:
-                to_delete = tuple(to_delete)
-                # TODO: Remove links, then neighbor.
-                self.cur.execute(queries.REMOVE_NEIGHBOR, (to_delete,))
-                self.con.commit()
-                print("Deleted!")
-                # TODO: Calculate Shortest Path!
+            self.remove_inactive_neighbors(routers)
+            self.cur.execute(queries.SELECT_ALL_LINKS)
+            links = self.cur.fetchall()
+            self.remove_inactive_links(links)
 
+    def remove_inactive_neighbors(self, routers):
+        to_delete = []
+        for router in routers:
+            if router[4] + (3 * router[3]) < time.time():
+                to_delete.append(router[0])
+                self.cur.execute(queries.REMOVE_LINK, (router[1],))
+        if to_delete:
+            to_delete = tuple(to_delete)
+            self.cur.execute(queries.REMOVE_NEIGHBORS, (to_delete,))
+            self.con.commit()
+            # Trigger Dijkstra.
+            self.get_shortest_path()
+
+    def remove_inactive_links(self, links):
+        to_delete = []
+        for link in links:
+            if link[2] + self.LSU_TIMEOUT < time.time():
+                to_delete.append(link[0])
+        if to_delete:
+            to_delete = tuple(to_delete)
+            self.cur.execute(queries.REMOVE_LINKS, (to_delete,))
+            self.con.commit()
+            # Trigger Dijkstra.
+            self.get_shortest_path()
+
+    def get_shortest_path(self):
+        # TODO: Dijkstra algorithm.
+        pass
 
     def read_table_rules(self):
         """Read table rules from switch."""
@@ -128,29 +146,59 @@ class Controller:
                     print self.p4info_helper.get_action_param_name(action_name, p.param_id)
                     print p.value
 
-
     def handle_hello_msg(self, pkt, ingress_port):
         rid = pkt[OSPF_Hdr].src
         hello_int = pkt[PWOSPF_Hello].hellointerval
         last_hello = time.time()
+        # Select all neighbors from controller's database.
         self.cur.execute(queries.SELECT_NEIGHBOR, (rid,))
         router = self.cur.fetchone()
         if router:
+            # Update neighbor's timestamp.
             self.cur.execute(
-                queries.UPDATE_NEIGHBOR, (last_hello, router[1],))
+                queries.UPDATE_NEIGHBOR_TS, (last_hello, rid,))
         else:
+            # Create new record in database.
             self.cur.execute(
                 queries.INSERT_NEIGHBOR,
                 (rid, ingress_port, hello_int, last_hello,))
+            # Create forward rule in switch (for LSU messages).
             self.write_ospf_table(rid, ingress_port)
-            # TODO: Save link to database.
+            # Save link to database.
             mask = IPAddress(pkt[PWOSPF_Hello].mask).netmask_bits()
             subnetwork = pkt[IP].src.split('.')
             subnetwork = '.'.join(subnetwork[:-1]) + '.10/' + str(mask)
-            self.cur.execute(queries.INSERT_LINK, (subnetwork, rid, hex(0)))
-            print 'Link created!'
+            self.cur.execute(queries.INSERT_LINK, (subnetwork, last_hello, rid))
         self.con.commit()
 
+    def save_links_to_db(self, lsa_list):
+        pass
+
+    def handle_lsu_msg(self, pkt):
+        rid = pkt[OSPF_Hdr].src
+        seq_number = pkt[PWOSPF_LSU].seq
+        self.cur.execute(queries.SELECT_NEIGHBOR, (rid,))
+        router = self.cur.fetchone()
+        if router:
+            last_seq_number = router[5]
+            lsa_list = pkt[PWOSPF_LSU].lsalist
+            if not last_seq_number:
+                print "First LSU from this neighbor."
+                # First LSU from this neighbor.
+                self.cur.execute(queries.UPDATE_NEIGHBOR_SEQ, (hex(seq_number), rid))
+                self.save_links_to_db(lsa_list)
+            elif last_seq_number != seq_number:
+                print "Link set of neighbor has changed."
+                # Link set of neighbor has changed.
+                self.cur.execute(queries.UPDATE_NEIGHBOR_SEQ, (hex(seq_number), rid))
+                self.save_links_to_db(lsa_list)
+            else:
+                # Nothing changed. Drop packet.
+                return
+            self.con.commit()
+        else:
+            # Neighbor was inactive so it's no longer in database.
+            return
 
     def write_ospf_table(self, rid, ingress_port):
         try:
@@ -167,6 +215,21 @@ class Controller:
         except grpc.RpcError as e:
             print "GRPC error: {}".format(e)
 
+    def write_ipv4_table(self, ip, egress_port):
+        try:
+            table_entry = self.p4info_helper.buildTableEntry(
+                table_name="MyIngress.ipv4_lpm",
+                match_fields={
+                    "hdr.ipv4.dstAddr": ip
+                },
+                action_name="MyIngress.ipv4_forward",
+                action_params={
+                    "dstAddr": 'ff:ff:ff:ff:ff:ff',
+                    "port": egress_port
+                })
+            self.switch_conn.WriteTableEntry(table_entry)
+        except grpc.RpcError as e:
+            print "GRPC error: {}".format(e)
 
     def handle_pkt(self, pkt):
         binary_data = raw(pkt)
@@ -174,20 +237,22 @@ class Controller:
         cpu_meta = CPU_metadata(binascii.unhexlify(string_data[:12]))
         pkt = Ether(binascii.unhexlify(string_data[12:]))
 
-        if OSPF_Hdr in pkt and self.RID == pkt[OSPF_Hdr].src:
-            return
+        if OSPF_Hdr in pkt:
+            if self.RID == pkt[OSPF_Hdr].src:
+                # Packet sent from this controller.
+                return
 
-        if PWOSPF_Hello in pkt:
             ingress_port = cpu_meta.inport
             rid = pkt[OSPF_Hdr].src
-            print "Got a hello packet from {} on port {}".format(rid, ingress_port)
-            # pkt.show2()
-            self.handle_hello_msg(pkt, ingress_port)
-        elif PWOSPF_LSU in pkt:
-            pkt.show2()
-            # TODO: Handle OSPF LSU packets.
-            pass
 
+            if PWOSPF_Hello in pkt:
+                print "Got a hello packet from {} on port {}".format(rid, ingress_port)
+                # pkt.show2()
+                self.handle_hello_msg(pkt, ingress_port)
+            elif PWOSPF_LSU in pkt:
+                print "Got a LSU packet from {} on port {}".format(rid, ingress_port)
+                # pkt.show2()
+                self.handle_lsu_msg(pkt)
 
     def run(self):
         self.tl.start()

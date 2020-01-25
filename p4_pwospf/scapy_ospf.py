@@ -758,7 +758,7 @@ class PWOSPF_LSU(Packet):
     fields_desc = [XIntField("seq", 0x80000001),
                    ShortField("ttl", 1),
                    FieldLenField("lsacount", None, fmt="!I", count_of="lsalist"),  # noqa: E501
-                   PacketListField("lsalist", [], PWOSPF_LSA,
+                   PacketListField("lsalist", None, PWOSPF_LSA,
                                    count_from=lambda pkt: pkt.lsacount,
                                    length_from=lambda pkt: pkt.underlayer.len - 24)]  # noqa: E501
 

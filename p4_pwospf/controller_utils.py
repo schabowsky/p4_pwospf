@@ -98,8 +98,7 @@ def create_switch_connection(p4info_helper, device_id):
         for group in json_conf['multicast_group_entries']:
             mcast_group = p4info_helper.buildMulticastGroupEntry(
                 multicast_group_id=group['multicast_group_id'],
-                replicas=group['replicas']
-            )
+                replicas=group['replicas'])
             conn.WriteMulticastGroupEntry(mcast_group)
     except grpc.RpcError as e:
         print "GRPC error: {}".format(e)
