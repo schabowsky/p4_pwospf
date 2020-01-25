@@ -95,9 +95,9 @@ class Controller:
             self.cur.execute(queries.SELECT_ALL_NEIGHBORS)
             routers = self.cur.fetchall()
             self.remove_inactive_neighbors(routers)
-            self.cur.execute(queries.SELECT_ALL_LINKS)
-            links = self.cur.fetchall()
-            self.remove_inactive_links(links)
+            # self.cur.execute(queries.SELECT_ALL_LINKS)
+            # links = self.cur.fetchall()
+            # self.remove_inactive_links(links)
 
     def remove_inactive_neighbors(self, routers):
         to_delete = []
@@ -172,7 +172,14 @@ class Controller:
         self.con.commit()
 
     def save_links_to_db(self, lsa_list):
-        pass
+        for lsa in lsa_list:
+            lsa.show2()
+            rid = lsa.rid
+            subnet = lsa.subnet
+            mask = IPAddress(lsa.mask).netmask_bits()
+            subnet = subnet + '/' + str(mask)
+            ts = time.time()
+            self.cur.execute(queries.INSERT_LINK, (subnet, ts, rid,))
 
     def handle_lsu_msg(self, pkt):
         rid = pkt[OSPF_Hdr].src
