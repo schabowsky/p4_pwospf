@@ -40,7 +40,7 @@ REMOVE_NEIGHBOR = "DELETE FROM neighbor WHERE id=%s"
 
 REMOVE_NEIGHBORS = "DELETE FROM neighbor WHERE id IN %s"
 
-SELECT_NEIGHBORS_LINKS = "SELECT * FROM link WHERE neighbor_id=%s"
+SELECT_LINK = "SELECT * FROM link WHERE rid=%s AND subnet=%s"
 
 SELECT_ALL_LINKS = "SELECT * FROM link"
 
@@ -52,7 +52,7 @@ INSERT_LINK = """
 	) VALUES (%s, %s, %s)
 """
 
-UPDATE_LINK = "UPDATE link SET seq_number=%s WHERE neighbor_id=%s"
+UPDATE_LINK = "UPDATE link SET ts=%s WHERE subnet=%s AND rid=%s"
 
 REMOVE_LINK = "DELETE FROM link WHERE rid=%s"
 

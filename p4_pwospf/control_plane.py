@@ -16,6 +16,7 @@ from netaddr import IPAddress, IPNetwork
 
 import controller_utils as cu
 import queries
+from dijkstra import get_shortest_path
 # TODO: Make it in a prettier way.
 sys.path.append(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '../utils/'))
@@ -68,16 +69,17 @@ class Controller:
 
             self.cur.execute(queries.SELECT_ALL_LINKS)
             links = self.cur.fetchall()
-            lsa_list = None
+            lsa_list = []
+
             for l in links:
                 ip = IPNetwork(l[1])
                 subnet, mask = ip.ip, ip.netmask
                 rid = l[3]
                 lsa = PWOSPF_LSA(subnet=subnet, mask=mask, rid=rid)
-                lsa_list = lsa if not lsa_list else [lsa_list| lsa]
+                lsa_list.append(lsa)
 
             if lsa_list:
-                lsu_hdr = PWOSPF_LSU(seq=self.LSU_SEQ, ttl=1, lsalist=[lsa_list])
+                lsu_hdr = PWOSPF_LSU(seq=self.LSU_SEQ, ttl=1, lsalist=lsa_list)
                 pkts = []
                 for r in routers:
                     ip_pkt = ether_pkt / IP(src=self.RID, dst=r[1])
@@ -95,9 +97,9 @@ class Controller:
             self.cur.execute(queries.SELECT_ALL_NEIGHBORS)
             routers = self.cur.fetchall()
             self.remove_inactive_neighbors(routers)
-            # self.cur.execute(queries.SELECT_ALL_LINKS)
-            # links = self.cur.fetchall()
-            # self.remove_inactive_links(links)
+            self.cur.execute(queries.SELECT_ALL_LINKS)
+            links = self.cur.fetchall()
+            self.remove_inactive_links(links)
 
     def remove_inactive_neighbors(self, routers):
         to_delete = []
@@ -110,7 +112,7 @@ class Controller:
             self.cur.execute(queries.REMOVE_NEIGHBORS, (to_delete,))
             self.con.commit()
             # Trigger Dijkstra.
-            self.get_shortest_path()
+            self.get_paths()
 
     def remove_inactive_links(self, links):
         to_delete = []
@@ -122,11 +124,15 @@ class Controller:
             self.cur.execute(queries.REMOVE_LINKS, (to_delete,))
             self.con.commit()
             # Trigger Dijkstra.
-            self.get_shortest_path()
+            self.get_paths()
 
-    def get_shortest_path(self):
-        # TODO: Dijkstra algorithm.
-        pass
+    def get_paths(self):
+        self.cur.execute(queries.SELECT_ALL_LINKS)
+        links = self.cur.fetchall()
+        if links:
+            # return get_shortest_path(self.RID, links)
+            pass
+        return []
 
     def read_table_rules(self):
         """Read table rules from switch."""
@@ -173,13 +179,18 @@ class Controller:
 
     def save_links_to_db(self, lsa_list):
         for lsa in lsa_list:
-            lsa.show2()
+            # lsa.show2()
             rid = lsa.rid
             subnet = lsa.subnet
             mask = IPAddress(lsa.mask).netmask_bits()
             subnet = subnet + '/' + str(mask)
+            self.cur.execute(queries.SELECT_LINK, (subnet, rid,))
+            link = self.cur.fetchone()
             ts = time.time()
-            self.cur.execute(queries.INSERT_LINK, (subnet, ts, rid,))
+            if link:
+                self.cur.execute(queries.UPDATE_LINK, (ts, subnet, rid,))
+            else:
+                self.cur.execute(queries.INSERT_LINK, (subnet, ts, rid,))
 
     def handle_lsu_msg(self, pkt):
         rid = pkt[OSPF_Hdr].src
